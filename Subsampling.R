@@ -29,6 +29,10 @@ if (!dir.exists(dir)) {
 num_cores <- detectCores() - 1
 cl <- makeCluster(num_cores)
 
+
+
+# ----------------- Subsampling function definitions ---------------------------
+
 # Source the external C++ function parse_line_cpp()
 Rcpp::sourceCpp(file = "parse_line.cpp")
 
@@ -176,6 +180,98 @@ sample_dataset <- function(file_path, line_offsets, fsize, headerLN, n, k) {
   return(df)
 }
 
+
+# ----------------- Integrity checking function definitions --------------------
+
+# -----------------------------------------------------------------------------
+# Function: check_na
+# Calculates the percentage of missing values in each column of a dataframe.
+#
+# Parameters:
+#   - df: A dataframe to be checked for missing values.
+#
+# Returns:
+#   - A 2-column dataframe with:
+#       * features: names of the columns;
+#       * percent: the percentage of missing values in each column.
+# -----------------------------------------------------------------------------
+check_na <- function(df) {
+  # Initialize vector to store percentage of missing values
+  percent <- c()
+  
+  # (Unused variable preserved from original code)
+  idxs <- df[1, ]
+  
+  # Loop through each column to compute missing value ratio
+  for (col in 1:ncol(df)) {
+    na_count <- sum(is.na(df[, col]))
+    percent <- c(percent, na_count / nrow(df))
+  }
+  
+  # Build and return the result data frame
+  result <- data.frame(features = names(df), percent = percent)
+  return(result)
+}
+
+
+# -----------------------------------------------------------------------------
+# Function: is_constant
+#
+# Determines if a given vector is constant, meaning it contains only a single
+# unique value after omitting missing values.
+#
+# Parameters:
+#   - d: A vector (e.g., a dataframe column) to be checked.
+#
+# Returns:
+#   - TRUE if the vector is constant (or empty after NA removal), FALSE otherwise.
+# -----------------------------------------------------------------------------
+is_constant <- function(d) {
+  d <- na.omit(d)
+  unq_list <- unique(d)
+  if (length(unq_list) <= 1)
+    return(TRUE)
+  else
+    return(FALSE)
+}
+
+# -----------------------------------------------------------------------------
+# Function: check_constant
+#
+# Checks each column of a dataframe to determine whether it is constant.
+#
+# Parameters:
+#   - df: A dataframe to be checked.
+#
+# Returns:
+#   - A 2-column dataframe with:
+#       * features: names of the columns;
+#       * is_constant: indicator (1 if the column is constant, 0 if not).
+# -----------------------------------------------------------------------------
+check_constant <- function(df) {
+  # Initialize vector to store constant indicators
+  constant_sign <- c()
+  
+  # Loop through each column to check if it is constant
+  for (i in 1:ncol(df)) {
+    if (is_constant(df[, i]))
+      constant_sign <- c(constant_sign, 1)
+    else
+      constant_sign <- c(constant_sign, 0)
+  }
+  
+  # Build and return the result data frame
+  result <- data.frame(features = names(df), is_constant = constant_sign)
+  return(result)
+}
+
+
+
+
+
+
+
+
 # -----------------------------------------------------------------------------
 # Main Processing: Sampling m Datasets
 # -----------------------------------------------------------------------------
@@ -217,8 +313,13 @@ clusterEvalQ(cl, {
 })
 datasets <- parLapply(cl, 1:m, function(ds) {
   ds_data <- sample_dataset(file_path, line_offsets, fsize, headerLN, n, k)
+  na_df <- check_na(ds_data)
+  constant_df <- check_constant(ds_data)
+  goodness_table <- merge(na_df, constant_df, by = "features")
   output_file <- file.path(dir, sprintf("subsampledData_%d.csv", ds))
+  output_table <- file.path(dir, sprintf("GoodnessFor_%d.csv", ds))
   write.csv(ds_data, output_file, row.names = FALSE)
+  write.csv(goodness_table, output_table, row.names = FALSE)
   ds_data
 })
 

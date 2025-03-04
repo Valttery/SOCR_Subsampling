@@ -1,0 +1,200 @@
+---
+title: "integrity checking"
+output: html_document
+date: "2025-02-12"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+#check empty
+```{r}
+#input format: dataframe need to be checked
+#output format: 2 col dataframe. 
+#   col features: name of the columns; 
+#   col percent: percentage of missing of the columns
+check_na=function(df){
+  #initialize 
+  percent=c()
+  
+  idxs=df[1,]
+  
+  for(col in 1:ncol(df)){
+    
+    na_count=sum(is.na(df[,col]))
+    percent=c(percent,na_count/nrow(df))
+  }
+  
+  result=data.frame(features=names(df),percent=percent)
+  return(result)
+}
+
+
+
+
+#simulation
+X=rnorm(500*50,0,1)
+X[which(X<0)]=NA
+d=data.frame(matrix(X,nrow=500,ncol=50))
+check_na(d)
+```
+
+#check constant
+```{r} 
+#input format: dataframe need to be checked
+#output format: 2 col dataframe. 
+#   col features: name of the columns; 
+#   col is_constant: whether this column is constant(1 is constant; 0 is non-constant)
+is_constant=function(d){
+  d=na.omit(d)
+  unq_list=unique(d)
+  if(length(unq_list)<=1)
+    return(TRUE)
+  else
+    return(FALSE)
+
+}
+check_constant=function(df){
+  #initialize
+  constant_sign=c()
+  col_list=names(df)
+  #check each column
+  for(i in 1:ncol(df)){
+    if(is_constant(df[,i]))
+      constant_sign=c(constant_sign,1)
+    else
+      constant_sign=c(constant_sign,0)
+  }
+  result=data.frame(features=names(df),is_constant=constant_sign)
+  return(result)
+}
+
+#simulation
+X=rnorm(500*50,0,1)
+d=data.frame(matrix(X,nrow=500,ncol=50))
+const_col=sample(1:50,7)
+d[,const_col]=1
+check_constant(d)
+```
+
+#check 100 subsamples(500x50), get information of missing and constant.
+```{r}
+library(dplyr)
+number_file=100
+thresh=0.1
+
+#initialize
+features=c()#record columns with low missing
+missing_percent=c()#record their missing percent
+subsample_idx=c()#record the subsample they belong to
+
+
+#go through each subsample csv
+for(i in 1:number_file){
+  
+  df=read.csv(paste0("subsampledData_",i,".csv"))
+  #get missing percent in current subsample using previous method
+  na_percent=check_na(df)
+  
+  #update result
+  features=c(features,na_percent$features)
+  missing_percent=c(missing_percent,na_percent$percent)
+  idx=rep(i,ncol(df))
+  
+  subsample_idx=c(subsample_idx,idx)
+}
+
+#result: dataframe with 3 cols, showing name of the features(may be not unique), percent of missing, subsample it belongs to
+missing_info=data.frame(features=features,percent=missing_percent,subsample_idx=subsample_idx)
+#report=low_missing_result%>% group_by(features) %>%summarise(avg_percent=mean(percent))
+
+constant=c()#record columns with low missing
+features=c()
+subsample_idx=c()#record the subsample they belong to
+
+
+#go through each subsample csv
+for(i in 1:number_file){
+  df=read.csv(paste0("subsampledData_",i,".csv"))
+  
+  constant_info=check_constant(df)
+  
+  features=c(features,constant_info$features)
+  constant=c(constant,constant_info$is_constant)
+  idx=rep(i,ncol(df))
+  subsample_idx=c(subsample_idx,idx)
+}
+
+constant_info=data.frame(features=features,is_constant=constant,subsample_idx=subsample_idx)
+
+```
+#get meta data
+```{r}
+meta_data=data.frame(features=missing_info$features,missing_percent=missing_info$percent,is_constant=constant_info$is_constant,subsample_index=constant_info$subsample_idx)
+
+```
+
+
+#get all columns from subsamples
+```{r eval=FALSE, include=FALSE}
+all_columns=c()
+for(i in 1:number_file){
+  df=read.csv(paste0("subsampledData_",i,".csv"))
+  columns=names(df)
+  all_columns=c(all_columns,columns)
+}
+all_columns=unique(all_columns)
+usable_features_percent=length(usable_features)/length(all_columns)
+usable_features_percent
+```
+
+#get data type
+```{r eval=FALSE, include=FALSE}
+data_type=c()
+for(i in 1:ncol(low_missing_df)){
+  data_type=c(data_type,class(low_missing_df[,i]))
+}
+```
+
+
+#construct low-missing dataframe
+```{r eval=FALSE, include=FALSE}
+
+#result from previous step, recording low-missing columns and their subset
+low_missing_features=low_missing_result
+
+#initialize
+low_missing_df=matrix(NA,nrow=500)
+low_missing_df=data.frame(low_missing_df)
+names_df=c()
+
+#go through each subsample
+for(i in low_missing_features$subsample_idx){
+  
+  df=read.csv(paste0("subsampledData_",i,".csv"))
+  
+  #select information about missing for subsample i
+  df_temp=low_missing_features[low_missing_features$subsample_idx==i,]
+  
+  #go through each low-missing column in subsample i
+  for(f in df_temp$features){
+    
+    #get colname
+    names_feature=paste0(f,"_subsample_",i)
+    names_df=c(names_df,names_feature)
+    
+    #add the low-missing column in the objective dataframe
+    low_missing_df=cbind(low_missing_df,df[,f])
+  }
+}
+
+low_missing_df=low_missing_df[,-1]
+
+#set column names
+names(low_missing_df)=names_df
+
+#save result
+write.csv(low_missing_df,"low_missing_data.csv")
+```
+
+#next step: go through all samples, generate subsamples with only low missing. Check the size of origianl big dataset and estimate the proportion of usable feature.
