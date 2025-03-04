@@ -306,7 +306,7 @@ tic(sprintf("Sampling %d datasets", m))
 cat(sprintf("Using %d cores.\n", num_cores))
 # Sampling using multiple cores
 clusterExport(cl, varlist = c("file_path", "line_offsets", "fsize", "headerLN", "n", "k", "dir",
-                              "sample_dataset", "read_line_at"))
+                              "sample_dataset", "read_line_at", "ckeck_na", "check_constant"))
 clusterEvalQ(cl, {
   library(Rcpp)
   sourceCpp(file = "parse_line.cpp")
