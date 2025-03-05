@@ -6,7 +6,8 @@ library(tictoc)
 library(parallel)
 
 #file_path <- "ukb44534_compiled_tab-001.csv"
-file_path <- "Binomial_append_10k_1k.txt"
+file_path <- "UKBB_10k_1k.csv"
+#file_path <- "Binomial_append_10k_1k.txt"
 #file_path <- "Binomial_append_100k_10k.txt"
 #file_path <- "Binomial_append_1M_10k_2sd.txt"
 #file_path <- PATH_VALUE
@@ -142,6 +143,7 @@ read_line_at <- function(fileCon, line_offsets, i, fsize) {
 # -----------------------------------------------------------------------------
 sample_dataset <- function(file_path, line_offsets, fsize, headerLN, n, k) {
   # Randomly sample n rows from the file
+  na_strings <- c("", "NA", "NULL")
   num_rows <- length(line_offsets)
   #num_rows <- as.integer(system(paste("wc -l", file_path, "| awk '{print $1}'"), intern = TRUE))
   r <- sample(num_rows, n)
@@ -163,6 +165,8 @@ sample_dataset <- function(file_path, line_offsets, fsize, headerLN, n, k) {
     this_line_txt <- read_line_at(fileCon, line_offsets, i, fsize)
     #ln <- parse_line_cpp(this_line_txt, sep = "\t", quote = "\"")
     ln <- parse_line_cpp(this_line_txt, sep = ",", quote = "\"")
+    
+    ln[ln %in% na_strings] <- NA
     
     # Ensure the row has enough columns; pad with NA if necessary
     max_needed_col <- max(sampled_cols)
@@ -266,12 +270,6 @@ check_constant <- function(df) {
 }
 
 
-
-
-
-
-
-
 # -----------------------------------------------------------------------------
 # Main Processing: Sampling m Datasets
 # -----------------------------------------------------------------------------
@@ -306,7 +304,7 @@ tic(sprintf("Sampling %d datasets", m))
 cat(sprintf("Using %d cores.\n", num_cores))
 # Sampling using multiple cores
 clusterExport(cl, varlist = c("file_path", "line_offsets", "fsize", "headerLN", "n", "k", "dir",
-                              "sample_dataset", "read_line_at", "ckeck_na", "check_constant"))
+                              "sample_dataset", "read_line_at", "check_na", "is_constant", "check_constant"))
 clusterEvalQ(cl, {
   library(Rcpp)
   sourceCpp(file = "parse_line.cpp")
@@ -315,11 +313,12 @@ datasets <- parLapply(cl, 1:m, function(ds) {
   ds_data <- sample_dataset(file_path, line_offsets, fsize, headerLN, n, k)
   na_df <- check_na(ds_data)
   constant_df <- check_constant(ds_data)
-  goodness_table <- merge(na_df, constant_df, by = "features")
-  output_file <- file.path(dir, sprintf("subsampledData_%d.csv", ds))
-  output_table <- file.path(dir, sprintf("GoodnessFor_%d.csv", ds))
+  output_file <- file.path(dir, sprintf("subsampled_%d.csv", ds))
+  output_table <- file.path(dir, sprintf("Goodness_%d.csv", ds))
   write.csv(ds_data, output_file, row.names = FALSE)
+  goodness_table <- merge(na_df, constant_df, by = "features")
   write.csv(goodness_table, output_table, row.names = FALSE)
+  
   ds_data
 })
 
