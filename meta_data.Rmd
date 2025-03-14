@@ -1,0 +1,17 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+
+```{r}
+library(dplyr)
+file_number=2000
+meta_data=data.frame()
+for(i in 1:file_number){
+  df=read.csv(paste0("Goodness_",i,".csv"))
+  meta_data=rbind(meta_data,df)
+}
+meta_data=data.frame(meta_data%>% group_by(features) %>%summarise(missing_percent=mean(percent),is_constant=round(mean(is_constant))))
+write.csv(meta_data,"meta_data.csv")
+```
