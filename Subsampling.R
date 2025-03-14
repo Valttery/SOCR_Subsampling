@@ -5,8 +5,8 @@ library(Rcpp)
 library(tictoc)
 library(parallel)
 
-#file_path <- "ukb44534_compiled_tab-001.csv"
-file_path <- "UKBB_10k_1k.csv"
+file_path <- "ukb44534_compiled_tab-001.csv"
+#file_path <- "UKBB_10k_1k.csv"
 #file_path <- "Binomial_append_10k_1k.txt"
 #file_path <- "Binomial_append_100k_10k.txt"
 #file_path <- "Binomial_append_1M_10k_2sd.txt"
@@ -16,9 +16,9 @@ file_path <- "UKBB_10k_1k.csv"
 #n <- N_VALUE  # Number of rows to sample per dataset
 #k <- K_VALUE   # Number of columns to sample per dataset
 #m <- M_VALUE   # Number of datasets to sample
-n <- 300  # Number of rows to sample per dataset
-k <- 30   # Number of columns to sample per dataset
-m <- 5000   # Number of datasets to sample
+n <- 500  # Number of rows to sample per dataset
+k <- 50   # Number of columns to sample per dataset
+m <- 2000   # Number of datasets to sample
 dir <- "subsamples" # Target directory to put subsampled data
 
 # Create the subdirectory if it does not exist
@@ -163,8 +163,8 @@ sample_dataset <- function(file_path, line_offsets, fsize, headerLN, n, k) {
   for (j in 1:n) {
     i <- r[j]  # Get the j-th random row index
     this_line_txt <- read_line_at(fileCon, line_offsets, i, fsize)
-    #ln <- parse_line_cpp(this_line_txt, sep = "\t", quote = "\"")
-    ln <- parse_line_cpp(this_line_txt, sep = ",", quote = "\"")
+    ln <- parse_line_cpp(this_line_txt, sep = "\t", quote = "\"")
+    #ln <- parse_line_cpp(this_line_txt, sep = ",", quote = "\"")
     
     ln[ln %in% na_strings] <- NA
     
@@ -287,8 +287,8 @@ toc(log = TRUE, quiet = TRUE)
 # Read the CSV header (first line) to get the column names.
 fileCon <- file(file_path, "rb")
 header_line <- read_line_at(fileCon, line_offsets, 1, fsize)
-#headerLN <- parse_line_cpp(header_line, "\t", "\"")
-headerLN <- parse_line_cpp(header_line, ",", "\"")
+headerLN <- parse_line_cpp(header_line, "\t", "\"")
+#headerLN <- parse_line_cpp(header_line, ",", "\"")
 cat("Total columns in file:", length(headerLN), "\n")
 close(fileCon)
 
