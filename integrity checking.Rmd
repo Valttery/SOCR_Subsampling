@@ -45,22 +45,33 @@ check_na(d)
 #output format: 2 col dataframe. 
 #   col features: name of the columns; 
 #   col is_constant: whether this column is constant(1 is constant; 0 is non-constant)
-is_constant=function(d){
+is_constant=function(d,thresh){
   d=na.omit(d)
-  unq_list=unique(d)
-  if(length(unq_list)<=1)
-    return(TRUE)
-  else
-    return(FALSE)
+  if(class(d)!="numeric"){
+    unq_list=unique(d)
+    if(length(unq_list)<=1)
+      return(TRUE)
+    else
+      return(FALSE)
+  }
+  
+  else{
+    low_bound=min(d)
+    up_bound=max(d)
+    if(abs(low_bound-up_bound)<thresh)
+      return(TRUE)
+    else
+      return(FALSE)
+  }
 
 }
-check_constant=function(df){
+check_constant=function(df,thresh=0.00001){
   #initialize
   constant_sign=c()
   col_list=names(df)
   #check each column
   for(i in 1:ncol(df)){
-    if(is_constant(df[,i]))
+    if(is_constant(df[,i],thresh))
       constant_sign=c(constant_sign,1)
     else
       constant_sign=c(constant_sign,0)
@@ -73,65 +84,90 @@ check_constant=function(df){
 X=rnorm(500*50,0,1)
 d=data.frame(matrix(X,nrow=500,ncol=50))
 const_col=sample(1:50,7)
-d[,const_col]=1
-check_constant(d)
+d[,const_col]=0.0000000000001
+sort(which(check_constant(d)$is_constant==1),decreasing=FALSE)
+sort(const_col,decreasing=FALSE)
+```
+#check datatype
+```{r}
+get_datatype=function(col){
+  col=na.omit(col)
+  if (length(col) == 0) {
+    detected_type <- "Empty"
+  } else if (all(is.numeric(col))) {
+    if (all(col %in% c(0, 1))) {
+      detected_type <- "Binary"
+    } else {
+      detected_type <- "Numeric"
+    }
+  } else if (any(grepl("^\\d{4}-\\d{2}-\\d{2}$", col))) {
+    detected_type <- "Date"
+  } else {
+    detected_type <- "Categorical"
+  return(detected_type)
+  }
+}
+  
+check_datatype=function(df){
+  data_type=c()
+  #check each column
+  for(i in 1:ncol(df)){
+    data_type=c(data_type,get_datatype(df[,i]))
+  }
+  result=data.frame(features=names(df),type=data_type)
+  return(result)
+}
 ```
 
-#check 100 subsamples(500x50), get information of missing and constant.
+```{r}
+get_most_frequent=function(s){
+  freq_table=table(s)
+  most_frequent=names(which.max(freq_table))
+  return(most_frequent)
+}
+```
+
+
+#function: get meta data
 ```{r}
 library(dplyr)
 number_file=100
-thresh=0.1
+get_meta=function(path=".",number_file){
+  #initialize
+  features=c()#record columns with low missing
+  missing_percent=c()
+  #record their missing percent
+  subsample_idx=c()#record the subsample they belong to
+  constant=c()
+  types=c()
 
-#initialize
-features=c()#record columns with low missing
-missing_percent=c()#record their missing percent
-subsample_idx=c()#record the subsample they belong to
+  #go through each subsample csv
+  for(i in 1:number_file){
+    df=read.csv(paste0(path,"/subsampled_",i,".csv"))
+    #get missing percent in current subsample using previous method
+    na_info=check_na(df)
+    constant_info=check_constant(df)
+    type_info=check_datatype(df)
+    #update result
+    features=c(features,na_info$features)
+    constant=c(constant,constant_info$is_constant)
+    missing_percent=c(missing_percent,na_info$percent)
+    types=c(types,type_info$type)
+    idx=rep(i,ncol(df))
+  
+    subsample_idx=c(subsample_idx,idx)
+  }
 
-
-#go through each subsample csv
-for(i in 1:number_file){
-  
-  df=read.csv(paste0("subsampledData_",i,".csv"))
-  #get missing percent in current subsample using previous method
-  na_percent=check_na(df)
-  
-  #update result
-  features=c(features,na_percent$features)
-  missing_percent=c(missing_percent,na_percent$percent)
-  idx=rep(i,ncol(df))
-  
-  subsample_idx=c(subsample_idx,idx)
+  meta_data=data.frame(features=features,missing_percent=missing_percent,is_constant=constant,subsample_index=subsample_idx,type=types)
+  unique_meta_data=meta_data%>% group_by(features) %>%summarise(missing_percent=mean(missing_percent),is_constant=round(mean(is_constant)),types=get_most_frequent(type))
+  return(unique_meta_data)
 }
-
-#result: dataframe with 3 cols, showing name of the features(may be not unique), percent of missing, subsample it belongs to
-missing_info=data.frame(features=features,percent=missing_percent,subsample_idx=subsample_idx)
-#report=low_missing_result%>% group_by(features) %>%summarise(avg_percent=mean(percent))
-
-constant=c()#record columns with low missing
-features=c()
-subsample_idx=c()#record the subsample they belong to
-
-
-#go through each subsample csv
-for(i in 1:number_file){
-  df=read.csv(paste0("subsampledData_",i,".csv"))
-  
-  constant_info=check_constant(df)
-  
-  features=c(features,constant_info$features)
-  constant=c(constant,constant_info$is_constant)
-  idx=rep(i,ncol(df))
-  subsample_idx=c(subsample_idx,idx)
-}
-
-constant_info=data.frame(features=features,is_constant=constant,subsample_idx=subsample_idx)
 
 ```
 #get meta data
 ```{r}
-meta_data=data.frame(features=missing_info$features,missing_percent=missing_info$percent,is_constant=constant_info$is_constant,subsample_index=constant_info$subsample_idx)
-
+meta_data=data.frame(get_meta(path="./UKBB subsamples/2000x500r_50c/subsamples",number_file=2000))
+write.csv(meta_data,"meta_data_Mar20.csv")
 ```
 
 
@@ -197,4 +233,8 @@ names(low_missing_df)=names_df
 write.csv(low_missing_df,"low_missing_data.csv")
 ```
 
-#next step: go through all samples, generate subsamples with only low missing. Check the size of origianl big dataset and estimate the proportion of usable feature.
+```{r}
+df=read.csv("subsampled_1374.csv")
+check_datatype(df)
+```
+

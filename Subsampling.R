@@ -397,7 +397,7 @@ cat(sprintf("First round sampling finished. Starting second round.\n"))
 criteria <- read.csv("meta_data.csv", header = FALSE, stringsAsFactors = FALSE)
 valid_names <- criteria[criteria[[2]] < targetMissingness & criteria[[3]] == 0, 1]
 valid_idx <- which(headerLN %in% valid_names)
-cat(sprintf("A total of %d good samples found:\n", length(valid_idx)))
+cat(sprintf("A total of %d good features found:\n", length(valid_idx)))
 
 tic("Second round sampling")
 datasets <- parLapply(cl, 1:m, function(ds) {
@@ -408,6 +408,9 @@ datasets <- parLapply(cl, 1:m, function(ds) {
   ds_data
 })
 toc(log = TRUE, quiet = TRUE)
+
+
+
 
 clusterCall(cl, gc)
 stopCluster(cl)

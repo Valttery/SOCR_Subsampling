@@ -1,0 +1,363 @@
+---
+title: "Data Preprocessing and Visualization"
+subtitle: "<h2><u>Exploratory Data Analysis(UKBB40K)</u></h2>"
+author: "<h3>Zhuoyi Yang (SOCR)</h3>"
+date: "`r format(Sys.time(), '%B %Y')`"
+tags: [Data Preprocessing, Dimensionality Reduction, Visualization, Feature Selection] 
+output:
+  html_document:
+    theme: spacelab
+    highlight: tango
+    includes:
+      before_body: SOCR_header.html
+    toc: true
+    number_sections: true
+    toc_depth: 2
+    toc_float:
+      collapsed: false
+      smooth_scroll: true
+    code_folding: show
+    self_contained: yes
+---
+
+# Packages
+
+```{r packages, message=FALSE}
+library(utility)
+library(progress)
+library(data.table)
+library(Rtsne)
+library(ggplot2)
+library(plotly)
+library(lubridate)
+library(dummies)
+library(umap)
+library(dplyr)
+library(missForest)
+```
+
+# Data Processing
+
+total_cols: 22940L
+total rows: 502493
+
+```{r data statistics(columns and rows), message=FALSE}
+initial_read <- fread("ukbb_data/ukb44534_compiled_tab-001.csv", nrows = 1)
+total_cols <- ncol(initial_read)
+total_rows <- as.numeric(system("wc -l < ukbb_data/ukb44534_compiled_tab-001.csv", intern=TRUE))
+```
+
+This code block sets up parallel processing capabilities, defines file paths, and initializes progress tracking. It includes a function to process each column of the dataset, determining the data type and saving summaries.
+
+```{r data statistics(types)}
+library(data.table)
+library(foreach)
+library(doParallel)
+
+cores <- detectCores() - 1
+registerDoParallel(cores)
+
+data_path <- "ukbb_data/1000_rows.csv"
+progress_path <- "progress_log.csv"
+total_cols <- 29L
+
+plot_dir <- paste0("plots/")
+if (!dir.exists(plot_dir)) {
+  dir.create(plot_dir, recursive = TRUE)
+  }
+
+summary_dir <- paste0("summaries/")
+if (!dir.exists(summary_dir)) {
+  dir.create(summary_dir, recursive = TRUE)
+  }
+if (file.exists(progress_path)) {
+  progress <- fread(progress_path)
+  start_col <- max(progress$col_processed) + 1
+} else {
+  fwrite(data.table(col_processed = integer(0)), progress_path)
+  start_col <- 2  
+}
+
+process_column <- function(col) {
+  column_titles <- fread(data_path, nrows = 1)
+  col_title <- names(column_titles)[col]
+  current_col_sample <- fread(data_path, select = col, nrows = 30)
+  detected_type <- "Other"
+  sample_values <- na.omit(current_col_sample[[1]])
+  if (length(sample_values) == 0) {
+    detected_type <- "Empty"
+  } else if (all(is.numeric(sample_values))) {
+    if (all(sample_values %in% c(0, 1))) {
+      detected_type <- "Binary"
+    } else {
+      detected_type <- "Numeric"
+    }
+  } else if (any(grepl("^\\d{4}-\\d{2}-\\d{2}$", sample_values))) {
+    detected_type <- "Date"
+  } else {
+    detected_type <- "Categorical"
+    current_col <- fread(data_path, select = col)
+    freq <- table(current_col[[1]], useNA = "ifany")
+    freq <- as.data.frame(freq)
+    freq$Prop <- freq$Freq / sum(freq$Freq)
+    fwrite(freq, paste0("summaries/", col_title, ".csv"))
+  }
+
+  fwrite(data.table(col_processed = col), progress_path, append = TRUE)
+  return(list(colname = col_title, type = detected_type))
+}
+
+results <- foreach(col = start_col:total_cols, .combine = 'rbind', .packages = 'data.table') %dopar% {
+  process_column(col)
+}
+
+results <- as.data.table(results)
+fwrite(results, "column_types_summary.csv")
+
+print(results)
+```
+
+This code block sets up for data visualization by reading a summary file and preparing a pie chart to visualize the distribution of data types.
+
+```{r data statistics(plot), message=FALSE}
+file_path <- "column_types_summary.csv" 
+data <- fread(file_path)
+
+
+type_counts <- table(data$type)
+type_counts_df <- as.data.frame(type_counts)
+names(type_counts_df) <- c("Type", "Frequency")
+type_counts_df$Prop <- type_counts_df$Frequency / sum(type_counts_df$Frequency)
+
+
+if (nrow(type_counts_df) > 1) {
+  pie_colors <- rainbow(nrow(type_counts_df))
+  png(file = "type_distribution_pie_chart.png")
+  pie(type_counts_df$Frequency, labels = paste0(type_counts_df$Type, ": ", round(type_counts_df$Prop * 100, 1), "%"), 
+      col = pie_colors, main = "Pie Chart of Data Types")
+  dev.off()
+} else {
+  cat("Not enough data to plot a pie chart.\n")
+}
+```
+
+# Data Processing
+
+Read subset for toy analysis
+
+```{r subset ready and preprocess, message=FALSE}
+data <- fread('ukbb_data/1000_rows.csv', na.strings = c("", "NA", "na"))
+data <- convert_dates_to_numeric(data)
+data <- apply_label_encoding(data)
+data <- normalize_df(data)
+data <- data %>% select(which(colSums(is.na(data)) != nrow(data)) %>% names())  
+data <- missForest(data, verbose = TRUE)$ximp
+data <- unique(data)                                  # remove duplication
+data_matrix <- as.matrix(data)            # make sure the data is numeric
+data <- data[, .SD, .SDcols = sapply(data, function(x) !all(x == 0))]
+```
+
+# Analysis
+
+## K-means
+
+This section performs a K-means clustering analysis. It identifies the optimal number of clusters using silhouette scores and show visualization of the of the K index parameter versus
+
+```{r kmeans, warning=FALSE}
+library(cluster)    
+library(factoextra)
+library(ggplot2)  # for plotting
+
+set.seed(123) 
+
+optimal_k <- 2
+highest_silhouette <- 0
+sil_scores <- numeric(29)  # Vector to store average silhouette scores for each k
+
+for(k in 2:30) {
+  km.res <- kmeans(data_matrix, centers = k, nstart = 25)
+  ss <- silhouette(km.res$cluster, dist(data_matrix))
+  avg.sil <- mean(ss[, 3])
+  sil_scores[k-1] <- avg.sil  # Store the silhouette score
+  
+  if(avg.sil > highest_silhouette){
+    highest_silhouette <- avg.sil
+    optimal_k <- k
+  }
+}
+
+clusters <- kmeans(data_matrix, centers = optimal_k, nstart = 25)
+
+cat("Optimal number of clusters:", optimal_k, "\n")
+print(clusters)
+
+# Plotting the silhouette score vs. number of clusters
+k_values <- 2:30
+sil_plot <- ggplot(data = data.frame(k_values, sil_scores), aes(x = k_values, y = sil_scores)) +
+            geom_line() +
+            scale_x_continuous(breaks = 2:30) +
+            theme_minimal() +
+            ggtitle("Silhouette Score vs. Number of Clusters") +
+            xlab("Number of Clusters (k)") +
+            ylab("Average Silhouette Score")
+
+print(sil_plot)
+```
+
+## Dimensional reduction with PCA，t-SNE and UMAP
+
+Here, PCA, t-SNE, and UMAP techniques are applied for dimensionality reduction. The results are prepared for subsequent visualization.
+
+```{r dimensionality-reduction}
+# PCA
+non_constant_data_matrix <- data_matrix[, apply(data_matrix, 2, var) != 0]
+pca_result_2d <- prcomp(non_constant_data_matrix, scale. = TRUE, center = TRUE)
+pca_2d <- pca_result_2d$x[, 1:2]  
+pca_3d <- pca_result_2d$x[, 1:3]  
+
+# t-sne
+tsne_2d <- Rtsne(data_matrix, dims = 2, perplexity=20, verbose=TRUE)    
+tsne_3d <- Rtsne(data_matrix, dims = 3, perplexity=20, verbose=TRUE)  
+
+# umap
+umap_result_2d <- umap(data_matrix, n_components = 2)                  
+umap_result_3d <- umap(data_matrix, n_components = 3)                  
+```
+
+## PCA 2D and 3D Visualization
+
+```{r pca visualization}
+pca_2d_df <- as.data.frame(pca_2d)               # PCA 2d
+pca_2d_df$cluster <- as.factor(clusters$cluster)
+ggplot(pca_2d_df, aes(x = PC1, y = PC2, color = cluster)) + geom_point() + theme_minimal() + ggtitle("PCA 2D Visualization with Cluster Coloring")
+pca_3d_df <- as.data.frame(pca_3d)
+pca_3d_df$cluster <- as.factor(clusters$cluster)
+fig_pca_3d_cluster <- plot_ly(pca_3d_df, x = ~PC1, y = ~PC2, z = ~PC3, color = ~cluster, colors = RColorBrewer::brewer.pal(3,"Dark2"), type = 'scatter3d', mode = 'markers')
+fig_pca_3d_cluster
+```
+
+## t-SNE 2D and 3D Visualization
+
+```{r tsne-visualization}
+data_2d <- as.data.frame(tsne_2d$Y)               # t-sne 2d 
+data_2d$cluster <- as.factor(clusters$cluster)    # add cluster result
+data_3d <- as.data.frame(tsne_3d$Y)
+data_3d$cluster <- as.factor(clusters$cluster)
+ggplot(data_2d, aes(x = V1, y = V2, color = cluster)) + geom_point() + theme_minimal() +   ggtitle("t-SNE 2D Visualization with Cluster Coloring")
+fig <- plot_ly(data_3d, x = ~V1, y = ~V2, z = ~V3, color = ~cluster, colors = RColorBrewer::brewer.pal(3,"Dark2"), type = 'scatter3d', mode = 'markers')
+fig
+```
+
+## UMAP 2D and 3D Visualization
+
+```{r umap-visualization}
+data_3d <- as.data.frame(tsne_3d$Y)
+data_3d$cluster <- as.factor(clusters$cluster)
+data_2d <- data.frame(X = umap_result_2d$layout[,1], Y = umap_result_2d$layout[,2])  # umap 2d
+data_2d$cluster <- as.factor(clusters$cluster)
+ggplot(data_2d, aes(x = X, y = Y, color = cluster)) + 
+  geom_point() + 
+  theme_minimal() + 
+  ggtitle("UMAP 2D Visualization with Cluster Coloring")
+data_3d <- data.frame(X = umap_result_3d$layout[,1], Y = umap_result_3d$layout[,2], Z = umap_result_3d$layout[,3])
+data_3d <- data.frame(X = umap_result_3d$layout[,1], Y = umap_result_3d$layout[,2], Z = umap_result_3d$layout[,3])  
+data_3d$cluster <- as.factor(clusters$cluster)
+
+fig <- plot_ly(data_3d, x = ~X, y = ~Y, z = ~Z, color = ~cluster, colors = RColorBrewer::brewer.pal(length(unique(data_3d$cluster)),"Dark2"), type = 'scatter3d', mode = 'markers')
+fig
+
+```
+# Feature selection
+
+
+## t-tests
+This code performs feature selection by conducting pairwise t-tests between clusters for each feature in the data matrix, adjusting the p-values using the Benjamini-Hochberg method to identify statistically significant features. It creates a summary table to display significant features and their adjusted p-values.
+
+```{r t test}
+results_ttest <- list()  
+feature_names <- colnames(data_matrix)  
+
+unique_clusters <- unique(clusters$cluster)
+
+for(i in 1:ncol(data_matrix)) {
+  feature_results <- list()  
+  
+  for(j in 1:(length(unique_clusters)-1)) {
+    for(k in (j+1):length(unique_clusters)) {
+      
+      group1 <- data_matrix[clusters$cluster == unique_clusters[j], i]
+      group2 <- data_matrix[clusters$cluster == unique_clusters[k], i]
+      
+      if(var(group1) != 0 && var(group2) != 0) {
+        feature_results[[paste(unique_clusters[j], unique_clusters[k], sep="_")]] <- t.test(group1, group2)$p.value
+      } else {
+        feature_results[[paste(unique_clusters[j], unique_clusters[k], sep="_")]] <- NA
+      }
+    }
+  }
+  
+  results_ttest[[feature_names[i]]] <- feature_results
+}
+
+all_p_values <- sapply(results_ttest, function(feature) {
+  min_p_value <- min(unlist(feature), na.rm = TRUE)
+  return(ifelse(is.infinite(min_p_value), NA, min_p_value))
+})
+
+p_adjusted <- p.adjust(all_p_values, method = "BH")
+significant_features <- which(p_adjusted < 0.05)
+
+summary_table <- data.frame(
+  Feature = feature_names[significant_features],
+  P_Value = p_adjusted[significant_features]
+)
+
+print(summary_table)
+
+```
+
+## Boruta based random forest
+This script applies the Boruta algorithm to identify important features in the data matrix, visualizing their importance using box-and-whisker plots, and then confirms the selection of significant features using the TentativeRoughFix function.
+
+```{r random forest}
+library(Boruta)
+library(plotly)
+library(tidyr)
+library(dplyr)
+
+cluster_numbers <- clusters$cluster
+cluster_factors <- as.factor(cluster_numbers)
+
+set.seed(123) # 
+data_matrix_df <- as.data.frame(data_matrix)
+
+boruta_output <- Boruta(cluster_factors ~ ., data=data_matrix_df, doTrace = 0)
+
+library(plotly)
+# plot(als, xlab="", xaxt="n")
+# lz<-lapply(1:ncol(als$ImpHistory), function(i)
+# als$ImpHistory[is.finite(als$ImpHistory[, i]), i])
+# names(lz)<-colnames(als$ImpHistory)
+# lb<-sort(sapply(lz, median))
+# axis(side=1, las=2, labels=names(lb), at=1:ncol(als$ImpHistory), cex.axis=0.5, font = 4)
+
+df_long <- tidyr::gather(as.data.frame(boruta_output$ImpHistory), feature, measurement)
+
+plot_ly(df_long, x=~feature, y = ~measurement, color = ~feature, type = "box") %>%
+    layout(title="Box-and-whisker Plots across all features (UKBB Data)",
+           xaxis = list(title="Features", categoryorder = "total descending"), 
+           yaxis = list(title="Importance"), showlegend=F)
+
+select_result <- TentativeRoughFix(boruta_output)
+print(select_result)
+select_result$finalDecision
+```
+
+```{r knockoff}
+library(knockoff)
+
+results <- knockoff.filter(data, as.numeric(cluster_factors), fdr = 0.80)
+print(results)
+
+```
+
